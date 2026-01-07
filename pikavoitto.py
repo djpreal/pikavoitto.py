@@ -1,187 +1,189 @@
+import time
 import requests
 import streamlit as st
 
-# --- SIMULAATIO-STATE ---
+# -------------------------
+# Asetukset
+# -------------------------
+st.set_page_config(page_title="Krypto botti", layout="centered")
 
-if "wallet_usdc" not in st.session_state:
-    st.session_state.wallet_usdc = 2000.0
-    st.session_state.position_btc = 0.0
-    st.session_state.entry_price = None
-    st.session_state.current_price = 30000.0
-    st.session_state.realized_pnl = 0.0
-    st.session_state.stake_presets = [100, 500, 1000, 1500, 2000]
-    st.session_state.stake_index = 0
-    st.session_state.current_stake_usdc = st.session_state.stake_presets[0]
-    st.session_state.locked_stake_usdc = None
+BTC_SYMBOL = "BTCUSDT"  # vaihda omaan pörssi-symboliin
+PRICE_API = (
+    "https://api.binance.com/api/v3/ticker/price?symbol=" + BTC_SYMBOL
+)
 
-# --- API ---
+REFRESH_SECONDS = 2  # hinnan päivitysväli
 
-def update_price_from_api():
+# -------------------------
+# Session state
+# -------------------------
+if "last_price" not in st.session_state:
+    st.session_state.last_price = 0.0
+if "prev_price" not in st.session_state:
+    st.session_state.prev_price = 0.0
+if "position" not in st.session_state:
+    st.session_state.position = 0.0  # BTC määrä
+if "entry_price" not in st.session_state:
+    st.session_state.entry_price = 0.0
+if "last_trade_pnl" not in st.session_state:
+    st.session_state.last_trade_pnl = 0.0
+if "last_trade_side" not in st.session_state:
+    st.session_state.last_trade_side = "-"
+if "pnl_percent" not in st.session_state:
+    st.session_state.pnl_percent = 0.0
+
+
+# -------------------------
+# Hinnan hakufunktio
+# -------------------------
+def fetch_btc_price() -> float:
     try:
-        resp = requests.get(
-            "https://api.mexc.com/api/v3/ticker/price",
-            params={"symbol": "BTCUSDT"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            price = float(data["price"])
-            if price > 0:
-                st.session_state.current_price = price
-    except Exception as e:
-        st.warning(f"API error: {e}")
+        r = requests.get(PRICE_API, timeout=3)
+        r.raise_for_status()
+        data = r.json()
+        return float(data["price"])
+    except Exception:
+        return st.session_state.last_price
 
-# --- LOGIIKKA ---
 
-def on_stake_button():
-    s = st.session_state
-    s.stake_index = (s.stake_index + 1) % len(s.stake_presets)
-    s.current_stake_usdc = s.stake_presets[s.stake_index]
+# -------------------------
+# Pää-UI
+# -------------------------
+st.title("📈 Krypto botti (BTC)")
 
-def on_buy(fraction: float):
-    s = st.session_state
-    if s.wallet_usdc <= 0 or s.current_price <= 0:
-        return
+# Nopea hinnan päivitys
+placeholder_price = st.empty()
+placeholder_prev = st.empty()
 
-    if s.position_btc == 0 or s.entry_price is None:
-        s.locked_stake_usdc = s.current_stake_usdc
+# Pollaa hinta kerran "sivun ajon" aikana
+st.session_state.prev_price = st.session_state.last_price
+current_price = fetch_btc_price()
+st.session_state.last_price = current_price
 
-    stake = s.locked_stake_usdc if s.locked_stake_usdc is not None else s.current_stake_usdc
-    amount_usdc = min(stake * fraction, s.wallet_usdc)
-    if amount_usdc <= 0:
-        return
-
-    btc_amount = amount_usdc / s.current_price
-
-    if s.position_btc == 0 or s.entry_price is None:
-        s.entry_price = s.current_price
-    else:
-        total_value_old = s.position_btc * s.entry_price
-        total_value_new = total_value_old + amount_usdc
-        s.entry_price = total_value_new / (s.position_btc + btc_amount)
-
-    s.position_btc += btc_amount
-    s.wallet_usdc -= amount_usdc
-
-def on_sell(fraction: float):
-    s = st.session_state
-    if s.position_btc <= 0 or s.entry_price is None or s.current_price <= 0:
-        return
-
-    stake = s.locked_stake_usdc if s.locked_stake_usdc is not None else s.current_stake_usdc
-    btc_for_full_stake = stake / s.current_price
-    btc_to_sell = min(btc_for_full_stake * fraction, s.position_btc)
-    if btc_to_sell <= 0:
-        return
-
-    usdc_got = btc_to_sell * s.current_price
-    realized = (s.current_price - s.entry_price) * btc_to_sell
-    s.realized_pnl += realized
-
-    s.position_btc -= btc_to_sell
-    s.wallet_usdc += usdc_got
-
-    if s.position_btc <= 1e-8:
-        s.position_btc = 0.0
-        s.entry_price = None
-        s.locked_stake_usdc = None
-
-def on_reset():
-    s = st.session_state
-    s.realized_pnl = 0.0
-
-def compute_pnl():
-    s = st.session_state
-    if s.position_btc == 0 or s.entry_price is None:
-        return 0.0
-    return (s.current_price - s.entry_price) * s.position_btc
-
-# --- UI ---
-
-st.set_page_config(page_title="BTC/USDC Kryptobotti", layout="centered")
-
-st.title("BTC/USDC Kryptobotti (Streamlit)")
-
-# Hinta
-update_price_from_api()
-st.metric("BTC/USDC hinta", f"{st.session_state.current_price:,.2f} USDC")
-
-# VOITTO-mittari
-pnl = compute_pnl()
-pnl_color = "white"
-pnl_text = f"VOITTO 0.00 USDC"
-if pnl > 0:
-    pnl_color = "lime"
-    pnl_text = f"VOITTO +{pnl:,.2f} USDC"
-elif pnl < 0:
-    pnl_color = "red"
-    pnl_text = f"VOITTO {pnl:,.2f} USDC"
-
-st.markdown(
-    f"<h3 style='text-align:center;color:{pnl_color};'>{pnl_text}</h3>",
-    unsafe_allow_html=True,
-)
-
-# Mittari progressbarilla (skaalataan -100..100 -> 0..100)
-sensitivity = 0.40
-if pnl != 0:
-    step_per_0_40 = 5
-    value = int((pnl / sensitivity) * step_per_0_40)
-else:
-    value = 0
-value = max(-100, min(100, value))
-bar_val = int((value + 100) / 2)  # 0..100
-
-st.progress(bar_val)
-
-# Lompakko + panos
-col1, col2 = st.columns(2)
-with col1:
-    st.write(
-        f"**Lompakko:** {st.session_state.wallet_usdc:,.2f} USDC | "
-        f"{st.session_state.position_btc:.6f} BTC"
+col_price, col_change = st.columns(2)
+with col_price:
+    placeholder_price.markdown(
+        f"**Hinta nyt**: {current_price:,.2f} USDT"
     )
-with col2:
-    st.write(f"**Panos:** {st.session_state.current_stake_usdc:,.2f} USDC")
-    if st.button("PANOS"):
-        on_stake_button()
+with col_change:
+    if st.session_state.prev_price > 0:
+        diff = current_price - st.session_state.prev_price
+        diff_pct = diff / st.session_state.prev_price * 100
+        color = "green" if diff >= 0 else "red"
+        placeholder_prev.markdown(
+            f"<span style='color:{color};'>Δ {diff:,.2f} ({diff_pct:+.2f} %)</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        placeholder_prev.markdown("Δ 0.00 (0.00 %)")
 
-# OSTA / MYY napit
-col_buy, col_sell = st.columns(2)
+st.divider()
 
-with col_buy:
-    st.subheader("OSTA")
-    if st.button("OSTA 100%"):
-        on_buy(1.0)
-    if st.button("OSTA 50%"):
-        on_buy(0.5)
-    if st.button("OSTA 10%"):
-        on_buy(0.1)
-
-with col_sell:
-    st.subheader("MYY")
-    if st.button("MYY 100%"):
-        on_sell(1.0)
-    if st.button("MYY 50%"):
-        on_sell(0.5)
-    if st.button("MYY 10%"):
-        on_sell(0.1)
-
-# Session voitot
-sess = st.session_state.realized_pnl
-sess_color = "white"
-sess_text = "VOITOT: 0.00 USDC"
-if sess > 0:
-    sess_color = "#FFD700"
-    sess_text = f"VOITOT: +{sess:,.2f} USDC"
-elif sess < 0:
-    sess_color = "#FF4C4C"
-    sess_text = f"VOITOT: {sess:,.2f} USDC"
-
-st.markdown(
-    f"<h3 style='text-align:center;color:{sess_color};'>{sess_text}</h3>",
-    unsafe_allow_html=True,
+# -------------------------
+# Osta / Myy napit vierekkäin (mobiili)
+# -------------------------
+amount = st.number_input(
+    "Määrä (BTC)", min_value=0.0, value=0.001, step=0.001, format="%.6f"
 )
 
-if st.button("RESET"):
-    on_reset()
+c1, c2 = st.columns(2)
+with c1:
+    buy_clicked = st.button("🟢 OSTA", use_container_width=True)
+with c2:
+    sell_clicked = st.button("🔴 MYY", use_container_width=True)
+
+# Yksinkertainen mock "orderi" – tähän omat API‑kutsut pörssille
+def execute_buy(qty: float, price: float):
+    # Päivitä position ja entry_price yksinkertaisella logiikalla
+    pos = st.session_state.position
+    if pos <= 0:
+        # Uusi long
+        st.session_state.position = qty
+        st.session_state.entry_price = price
+    else:
+        # Lisää longia: painotettu keskihinta
+        new_pos = pos + qty
+        st.session_state.entry_price = (pos * st.session_state.entry_price + qty * price) / new_pos
+        st.session_state.position = new_pos
+
+def execute_sell(qty: float, price: float):
+    pos = st.session_state.position
+    if pos > 0:
+        qty = min(qty, pos)
+        # Laske PnL tälle kauppalle
+        pnl = (price - st.session_state.entry_price) * qty
+        st.session_state.last_trade_pnl = pnl
+        st.session_state.last_trade_side = "MYY"
+        if pos - qty <= 0:
+            st.session_state.position = 0.0
+            st.session_state.entry_price = 0.0
+        else:
+            st.session_state.position = pos - qty
+    else:
+        # Short‑logiikan voi lisätä tarvittaessa
+        pass
+
+# Käsittele nappipainallukset
+if buy_clicked and amount > 0:
+    execute_buy(amount, current_price)
+    st.session_state.last_trade_pnl = 0.0
+    st.session_state.last_trade_side = "OSTA"
+
+if sell_clicked and amount > 0:
+    execute_sell(amount, current_price)
+
+# -------------------------
+# Voittohinta & mittari
+# -------------------------
+st.subheader("Positio & PnL")
+
+col_pos, col_entry = st.columns(2)
+with col_pos:
+    st.metric("Positio (BTC)", f"{st.session_state.position:.6f}")
+with col_entry:
+    ep = st.session_state.entry_price
+    st.metric("Entry-hinta", f"{ep:,.2f} USDT" if ep > 0 else "-")
+
+st.write("---")
+
+# Viimeisin kauppa
+pnl = st.session_state.last_trade_pnl
+side = st.session_state.last_trade_side
+if side != "-":
+    color = "green" if pnl >= 0 else "red"
+    st.markdown(
+        f"**Viimeisin kauppa**: {side} @ {current_price:,.2f} USDT – "
+        f"<span style='color:{color};'>PnL: {pnl:,.2f} USDT</span>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.write("Ei kauppoja vielä.")
+
+# Reaaliaikainen "mittari" – unrealized PnL %
+if st.session_state.position > 0 and st.session_state.entry_price > 0:
+    upnl = (current_price - st.session_state.entry_price) * st.session_state.position
+    upnl_pct = (current_price / st.session_state.entry_price - 1) * 100
+else:
+    upnl = 0.0
+    upnl_pct = 0.0
+
+st.session_state.pnl_percent = upnl_pct
+
+st.markdown("**Mittari (uPnL %)**")
+
+# Skalaa mittari välille 0–100 %
+gauge_min = -10
+gauge_max = 10
+clamped = max(gauge_min, min(gauge_max, upnl_pct))
+normalized = (clamped - gauge_min) / (gauge_max - gauge_min)
+
+st.progress(normalized)
+
+st.caption(
+    f"uPnL: {upnl:,.2f} USDT ({upnl_pct:+.2f} %)  |  mittarin alue: {gauge_min} % ... {gauge_max} %"
+)
+
+# -------------------------
+# Automaattinen refresh Streamlitissä
+# -------------------------
+# Tämä tekee nopeamman hinnan päivityksen ilman manuaalista re
