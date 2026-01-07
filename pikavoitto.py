@@ -1,4 +1,3 @@
-import time
 import requests
 import streamlit as st
 
@@ -146,7 +145,6 @@ with col2:
     st.write(f"**Panos:** {st.session_state.current_stake_usdc:,.2f} USDC")
     if st.button("PANOS"):
         on_stake_button()
-        st.experimental_rerun()
 
 # OSTA / MYY napit
 col_buy, col_sell = st.columns(2)
@@ -155,25 +153,19 @@ with col_buy:
     st.subheader("OSTA")
     if st.button("OSTA 100%"):
         on_buy(1.0)
-        st.experimental_rerun()
     if st.button("OSTA 50%"):
         on_buy(0.5)
-        st.experimental_rerun()
     if st.button("OSTA 10%"):
         on_buy(0.1)
-        st.experimental_rerun()
 
 with col_sell:
     st.subheader("MYY")
     if st.button("MYY 100%"):
         on_sell(1.0)
-        st.experimental_rerun()
     if st.button("MYY 50%"):
         on_sell(0.5)
-        st.experimental_rerun()
     if st.button("MYY 10%"):
         on_sell(0.1)
-        st.experimental_rerun()
 
 # Session voitot
 sess = st.session_state.realized_pnl
@@ -193,4 +185,3 @@ st.markdown(
 
 if st.button("RESET"):
     on_reset()
-    st.experimental_rerun()
